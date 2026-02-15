@@ -150,3 +150,16 @@ db_clear_transactions_category <- function(con, ids){
   )
   DBI::dbExecute(con, sql, params = unname(as.list(ids)))
 }
+
+db_delete_transactions <- function(con, ids){
+  ids <- as.integer(ids)
+  ids <- ids[!is.na(ids)]
+  if (length(ids) == 0) return(invisible(0L))
+  
+  sql <- sprintf(
+    "DELETE FROM transactions WHERE id IN (%s)",
+    paste(rep("?", length(ids)), collapse = ",")
+  )
+  DBI::dbExecute(con, sql, params = unname(as.list(ids)))
+  invisible(length(ids))
+}
