@@ -1,3 +1,5 @@
+########finances app pour les données desjardins##########
+
 library(shiny)
 library(bslib)
 library(DT)
@@ -30,6 +32,7 @@ message("app_dir = ", app_dir)
 source(file.path(app_dir, "R", "utils.R"))
 source(file.path(app_dir, "R", "parsers.R"))
 source(file.path(app_dir, "R", "db.R"))
+source(file.path(app_dir, "R", "suggest.R"))
 
 db_path <- file.path(app_dir, "depenses.sqlite")
 
@@ -47,7 +50,8 @@ dt_safe <- function(df) {
 
 # colonnes affichées dans Transactions
 tx_cols <- c("id","date","description","amount","direction","nature","source",
-             "bank_category_raw","category","subcategory","is_recurring","notes")
+             "bank_category_raw","category","subcategory","is_recurring","notes",
+             "cat_source")
 
 # ------------------ UI ------------------
 ui <- page_navbar(
@@ -84,7 +88,9 @@ ui <- page_navbar(
                 actionButton("btn_classify", "Classer la sélection", class = "btn-primary"),
                 actionButton("btn_clear_cat", "Effacer catégorie", class = "btn-outline-danger"),
                 actionButton("btn_clear_selection", "Réinitialiser sélection", class = "btn-secondary"),
-                actionButton("btn_delete_rows", "Supprimer ligne(s)", class = "btn-danger")
+                actionButton("btn_delete_rows", "Supprimer ligne(s)", class = "btn-danger"),
+                actionButton("btn_undo_last", "Annuler dernier import", class = "btn-warning")
+                
               ),
               card(card_header("Liste"), DTOutput("tbl"))
             )
@@ -160,6 +166,12 @@ server <- function(input, output, session){
     # assurer colonnes cat_* (si ton db.R les attend)
     if (!"cat_source" %in% names(rv$preview)) rv$preview$cat_source <- "manual"
     if (!"cat_confidence" %in% names(rv$preview)) rv$preview$cat_confidence <- NA_real_
+    
+    # Charger les mappings existants
+    maps <- build_category_maps(con)
+    # Appliquer les suggestions
+    rv$preview <- apply_suggestions(rv$preview, maps)
+    
   })
   
   output$preview <- renderDT({
@@ -176,6 +188,25 @@ server <- function(input, output, session){
     if (!"cat_source" %in% names(df)) df$cat_source <- "manual"
     if (!"cat_confidence" %in% names(df)) df$cat_confidence <- NA_real_
     
+    # Supprimer les doublons provenant des lignes "catégorie + description"
+    df <- df %>%
+      group_by(date, description, amount, source) %>%
+      # garder la version SANS bank_category_raw
+      arrange(!is.na(bank_category_raw)) %>%
+      slice(1) %>%
+      ungroup()
+    
+    batch_id <- paste0("batch_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+    
+    df$batch_id <- batch_id
+    
+    # 🔥 Supprimer les doublons provenant des lignes "catégorie + description"
+    df <- df %>%
+      group_by(date, description, amount, source) %>%
+      arrange(!is.na(bank_category_raw)) %>%  # garde la version SANS bank_category_raw
+      slice(1) %>%
+      ungroup()
+    
     db_upsert_transactions(con, df)
     bump_db()
     showNotification("Import enregistré.", type = "message", duration = 2)
@@ -188,6 +219,19 @@ server <- function(input, output, session){
     db_tick()
     
     df <- db_get_transactions(con)
+    
+    # Charger les mappings existants
+    maps <- build_category_maps(con)
+    
+    # Appliquer les suggestions aux transactions non catégorisées
+    df <- df %>% 
+      mutate(
+        category = if_else(
+          is.na(category) | category == "",
+          category,  # garde la catégorie existante
+          category
+        )
+      )
     
     # filtre période SAFE même si range absent (mais ici range existe)
     start_date <- input$range[1]
@@ -215,7 +259,10 @@ server <- function(input, output, session){
     df <- base_tx() %>% select(any_of(tx_cols))
     df <- dt_safe(df)
     
-    datatable(
+    # index (0-based) de la colonne cat_source pour la cacher dans le tableau
+    col_cat_source <- which(names(df) == "cat_source") - 1L
+    
+    dt <- datatable(
       df,
       rownames = FALSE,
       selection = list(mode = "multiple", target = "row"),
@@ -223,10 +270,25 @@ server <- function(input, output, session){
         pageLength = 15,
         scrollX = TRUE,
         stateSave = TRUE,
-        stateDuration = -1
+        stateDuration = -1,
+        columnDefs = list(
+          list(visible = FALSE, targets = col_cat_source)  # cache cat_source
+        )
       )
     )
+    
+    # Colorer la colonne category en fonction de cat_source == "auto"
+    dt <- dt %>% formatStyle(
+      "category",
+      color = styleEqual("auto", "red"),
+      fontWeight = styleEqual("auto", "bold"),
+      valueColumns = "cat_source"   # on base le style sur cat_source, pas sur category
+    )
+    
+    dt
   }, server = FALSE)
+  
+  
   
   observeEvent(input$btn_refresh, {
     bump_db()
@@ -307,6 +369,32 @@ server <- function(input, output, session){
       showNotification("Confirmation incorrecte. Tape SUPPRIMER.", type = "warning")
       return()
     }
+    
+    observeEvent(input$btn_undo_last, {
+      # trouver le batch le plus récent
+      last_batch <- DBI::dbGetQuery(con, "
+    SELECT batch_id, MAX(id) AS max_id
+    FROM transactions
+    WHERE batch_id IS NOT NULL
+    GROUP BY batch_id
+    ORDER BY max_id DESC
+    LIMIT 1
+  ")
+      
+      if (nrow(last_batch) == 0) {
+        showNotification("Aucun import à annuler.", type = "warning")
+        return()
+      }
+      
+      bid <- last_batch$batch_id[1]
+      
+      # supprimer toutes les lignes de ce batch
+      DBI::dbExecute(con, "DELETE FROM transactions WHERE batch_id = ?", params = list(bid))
+      
+      bump_db()
+      showNotification(paste("Import annulé :", bid), type = "message", duration = 3)
+    })
+    
     
     sel <- input$tbl_rows_selected
     if (is.null(sel) || length(sel) == 0) {

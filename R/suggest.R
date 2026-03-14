@@ -102,7 +102,7 @@ apply_suggestions <- function(df_new, maps, min_conf = 0.60){
       cat_source = if_else(!is.na(cat_suggested), "auto", coalesce(cat_source, NA_character_)),
       cat_confidence = if_else(!is.na(conf_suggested), conf_suggested, cat_confidence)
     ) %>%
-    select(-merchant, -starts_with("sug_"), -starts_with("cat_"), -starts_with("sub_"), -conf_suggested)
+    select(-merchant, -starts_with("sug_"), -conf_suggested)
   
   out
 }

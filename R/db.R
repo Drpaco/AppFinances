@@ -33,6 +33,11 @@ db_init <- function(con){
     DBI::dbExecute(con, "ALTER TABLE transactions ADD COLUMN cat_confidence REAL")
   }
   
+  cols_tx <- DBI::dbGetQuery(con, "PRAGMA table_info(transactions)")$name
+  if (!"batch_id" %in% cols_tx) {
+    DBI::dbExecute(con, "ALTER TABLE transactions ADD COLUMN batch_id TEXT")
+  }
+  
   DBI::dbExecute(con, "
     CREATE TABLE IF NOT EXISTS categories (
       category TEXT,
@@ -54,16 +59,17 @@ db_upsert_transactions <- function(con, df){
   if (nrow(df) == 0) return(invisible())
   
   stmt <- "
-    INSERT OR IGNORE INTO transactions
-    (date, description, amount, direction, nature, source, bank_category_raw,
-     category, subcategory, is_recurring, notes, hash, cat_source, cat_confidence)
-    VALUES
-    (:date, :description, :amount, :direction, :nature, :source, :bank_category_raw,
-     :category, :subcategory, :is_recurring, :notes, :hash, :cat_source, :cat_confidence)
+INSERT OR IGNORE INTO transactions
+(date, description, amount, direction, nature, source, bank_category_raw,
+ category, subcategory, is_recurring, notes, hash, cat_source, cat_confidence, batch_id)
+VALUES
+(:date, :description, :amount, :direction, :nature, :source, :bank_category_raw,
+ :category, :subcategory, :is_recurring, :notes, :hash, :cat_source, :cat_confidence, :batch_id)
   "
   
   cols <- c("date","description","amount","direction","nature","source","bank_category_raw",
-            "category","subcategory","is_recurring","notes","hash","cat_source","cat_confidence")
+            "category","subcategory","is_recurring","notes","hash",
+            "cat_source","cat_confidence","batch_id")
   
   missing <- setdiff(cols, names(df))
   if (length(missing) > 0) stop("Colonnes manquantes dans df: ", paste(missing, collapse = ", "))
