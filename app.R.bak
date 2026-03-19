@@ -11,7 +11,6 @@ library(DBI)
 library(RSQLite)
 library(tibble)
 library(ggplot2)
-library(bsicons)
 
 options(shiny.sanitize.errors = FALSE)
 options(shiny.fullstacktrace = TRUE)
@@ -35,8 +34,6 @@ source(file.path(app_dir, "R", "utils.R"))
 source(file.path(app_dir, "R", "parsers.R"))
 source(file.path(app_dir, "R", "db.R"))
 source(file.path(app_dir, "R", "suggest.R"))
-
-# ...existing code...
 
 db_path <- file.path(app_dir, "depenses.sqlite")
 
@@ -184,8 +181,6 @@ server <- function(input, output, session){
   # petit “tick” pour rafraîchir partout
   db_tick <- reactiveVal(0)
   bump_db <- function() db_tick(isolate(db_tick()) + 1)
-  # ------------------ Dashboard ------------------
-  dashboard_server(input, output, session, con, db_tick)
   
   # info DB visible
   output$db_info <- renderText({
